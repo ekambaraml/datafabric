@@ -108,6 +108,13 @@ podman run --privileged -d   --name registry   -p 5000:5000 -v /data/private:/va
 
 Following commands will save the CASE file for IBM common foundation services, Cloud Pak for Data, Common Core Services and Watson Knowledge Catalog and Mirroring to customer's private registry.
 
+#### Private registry access validation
+podman login -u ${PRIVATE_REGISTRY_USER} -p ${PRIVATE_REGISTRY_PASSWORD} ${PRIVATE_REGISTRY} --tls-verify=false
+
+#### IBM registry access validation
+podman login -u ${REGISTRY_USER} -p ${REGISTRY_PASSWORD} ${REGISTRY_SERVER} --tls-verify=false
+
+
 ```
 # cloud pak for data
 cloudctl case save \
@@ -153,11 +160,11 @@ cloudctl case launch \
   --args "--registry ${PRIVATE_REGISTRY} --user ${PRIVATE_REGISTRY_USER} --pass ${PRIVATE_REGISTRY_PASSWORD} --inputDir ${OFFLINEDIR}"
 
 ```
-
-
-
-## OpenShift Configuration
-
+#### Validate the mirrored images
+```
+curl -k -u ${PRIVATE_REGISTRY_USER}:${PRIVATE_REGISTRY_PASSWORD} http://${PRIVATE_REGISTRY}/v2/_catalog?n=6000 |  python -m json.tool
+curl -k -u ${PRIVATE_REGISTRY_USER}:${PRIVATE_REGISTRY_PASSWORD} http://${PRIVATE_REGISTRY}/v2/_catalog?n=6000 |  python -m json.tool | wc -l
+```
 
 
 ## Node Settings
@@ -213,5 +220,218 @@ oc label machineconfigpool worker db2u-kubelet=sysctl
 oc get machineconfigpool
 ```
 
+## Configure PullSecret
+
+oc extract secret/pull-secret -n openshift-config
+
+
+
+
+oc get imageContentSourcePolicy
+oc get node
+
+## Create the catalog source
+oc get catalogsource -n openshift-marketplace
+
+cloudctl case launch \
+  --case ${OFFLINEDIR}/ibm-cp-common-services-1.6.0.tgz \
+  --inventory ibmCommonServiceOperatorSetup \
+  --namespace openshift-marketplace \
+  --action install-catalog \
+    --args "--registry ${PRIVATE_REGISTRY} --inputDir ${OFFLINEDIR} --recursive"
+
+oc get catalogsource -n openshift-marketplace opencloud-operators \
+-o jsonpath='{.status.connectionState.lastObservedState} {"\n"}'
+
+
+cloudctl case launch \
+  --case ${OFFLINEDIR}/ibm-cpd-scheduling-1.2.2.tgz \
+  --inventory schedulerSetup \
+  --namespace openshift-marketplace \
+  --action install-catalog \
+    --args "--inputDir ${OFFLINEDIR} --recursive"
+
+oc get catalogsource -n openshift-marketplace ibm-cpd-scheduling-catalog \
+-o jsonpath='{.status.connectionState.lastObservedState} {"\n"}'
+
+cloudctl case launch \
+  --case ${OFFLINEDIR}/ibm-cp-datacore-2.0.3.tgz \
+  --inventory cpdPlatformOperator \
+  --namespace openshift-marketplace \
+  --action install-catalog \
+    --args "--inputDir ${OFFLINEDIR} --recursive"
+
+oc get catalogsource -n openshift-marketplace cpd-platform \
+-o jsonpath='{.status.connectionState.lastObservedState} {"\n"}'
+
+yum install -y python2
+alternatives --set python /usr/bin/python2
+pip2 install pyyaml
+
+cloudctl case launch \
+  --case ${OFFLINEDIR}/ibm-wkc-4.0.1.tgz \
+  --inventory wkcOperatorSetup \
+  --namespace openshift-marketplace \
+  --action install-catalog \
+    --args "--inputDir ${OFFLINEDIR} --recursive"
+
+
+oc get catalogsource -n openshift-marketplace ibm-cpd-wkc-operator-catalog \
+-o jsonpath='{.status.connectionState.lastObservedState} {"\n"}'
+
+
+##  Create Projects
+
+```
+oc new-project ibm-common-services
+oc new-project cpd
+
+# Operator Group creation
+
+cat <<EOF |oc apply -f -
+apiVersion: operators.coreos.com/v1alpha2
+kind: OperatorGroup
+metadata:
+  name: operatorgroup
+  namespace: ibm-common-services
+spec:
+  targetNamespaces:
+  - ibm-common-services
+EOF
+
+
+# Namescope operators
+cat <<EOF |oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ibm-namespace-scope-operator
+  namespace: ${IBM_COMMON_SERVICE}
+spec:
+  channel: v3
+  installPlanApproval: Automatic
+  name: ibm-namespace-scope-operator
+  source: opencloud-operators
+  sourceNamespace: openshift-marketplace
+EOF
+
+Wait for the Namescope operator pod to come up before running the next command oc get pods -n ${IBM_COMMON_SERVICE}
+
+cat <<EOF |oc apply -f -
+apiVersion: operator.ibm.com/v1
+kind: NamespaceScope
+metadata:
+  name: cpd-operators
+  namespace: ${IBM_COMMON_SERVICE}
+spec:
+  namespaceMembers:
+  - ${IBM_COMMON_SERVICE}
+  - ${CPD_INSTANCE}
+EOF
+
+
+
+oc -n ibm-common-services get namespacescope common-service -o yaml
+oc -n ibm-common-services edit namespacescope common-service
+oc -n ibm-common-services get configmap namespace-scope -o yaml
+```
+
+## Subscriptions
+
+# IBM Cloud Pak foundational services
+# v3.10.0
+
+cat <<EOF |oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ibm-common-service-operator
+  namespace: ibm-common-services
+spec:
+  channel: v3
+  installPlanApproval: Automatic
+  name: ibm-common-service-operator
+  source: opencloud-operators
+  sourceNamespace: openshift-marketplace
+EOF
+
+oc --namespace ibm-common-services get csv
+oc get crd | grep operandrequest
+oc api-resources --api-group operator.ibm.com
+
+
+
+Installing individual foundational services
+The IBM Cloud Pak for Data platform operator automatically installs the following foundational services:
+* Certificate management service
+* Identity and Access Management Service (IAM Service)
+* Administration hub
+
+# IBM Cloud pack for Data Scheduler
+
+cat <<EOF |oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ibm-cpd-scheduling-catalog-subscription
+  namespace: cpd-operators # Specify the project that contains the Cloud Pak foundational services operators
+spec:
+  channel: v1.2
+  installPlanApproval: Automatic
+  name: ibm-cpd-scheduling-operator
+  source: ibm-cpd-scheduling-catalog
+  sourceNamespace: openshift-marketplace
+EOF
+
+oc get sub -n cpd-operators ibm-cpd-scheduling-catalog-subscription \
+-o jsonpath='{.status.installedCSV} {"\n"}'
+
+oc get csv -n cpd-operators ibm-cpd-scheduling-operator.v1.2.2 \
+-o jsonpath='{ .status.phase } : { .status.message} {"\n"}'
+
+oc get deployments -n cpd-operators -l olm.owner="ibm-cpd-scheduling-operator.v1.2.2" \
+-o jsonpath="{.items[0].status.availableReplicas} {'\n'}"
+
+
+## Cloud Pak for Data operator subscription
+
+cat <<EOF |oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cpd-operator
+  namespace: ibm-common-services   #  Pick the project where you want to install the Cloud Pak for Data platform operator
+spec:
+  channel: v2.0
+  installPlanApproval: Automatic
+  name: cpd-platform-operator
+  source: cpd-platform
+  sourceNamespace: openshift-marketplace
+EOF
+
+cat <<EOF |oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ibm-namespace-scope-operator
+  namespace: ibm-common-services
+spec:
+  channel: v3
+  installPlanApproval: Automatic
+  name: ibm-namespace-scope-operator
+  source: opencloud-operators
+  sourceNamespace: openshift-marketplace
+EOF
+
+
+oc get sub -n ibm-common-services cpd-operator \
+-o jsonpath='{.status.installedCSV} {"\n"}'
+
+oc get csv -n ibm-common-services cpd-platform-operator.v2.0.3 \
+-o jsonpath='{ .status.phase } : { .status.message} {"\n"}'
+
+
+oc get deployments -n ibm-common-services -l olm.owner="cpd-platform-operator.v2.0.3" \
+-o jsonpath="{.items[0].status.availableReplicas} {'\n'}"
 
 
