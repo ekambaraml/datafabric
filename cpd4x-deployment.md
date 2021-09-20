@@ -365,13 +365,12 @@ oc -n ibm-common-services edit namespacescope common-service
 oc -n ibm-common-services get configmap namespace-scope -o yaml
 ```
 
-## Subscriptions
+## Creating Subscriptions
 
 
 ### IBM Cloud Pak foundational services
-```
 # v3.10.0
-
+```
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
@@ -392,22 +391,16 @@ oc api-resources --api-group operator.ibm.com
 ```
 
 
-## Installing individual foundational services
-
-The IBM Cloud Pak for Data platform operator automatically installs the following foundational services:
-* Certificate management service
-* Identity and Access Management Service (IAM Service)
-* Administration hub
 
 
-## IBM Cloud pack for Data Scheduler
+### IBM Cloud pack for Data Scheduler (Optional)
 ```
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
   name: ibm-cpd-scheduling-catalog-subscription
-  namespace: cpd # Specify the project that contains the Cloud Pak foundational services operators
+  namespace: bm-common-services   # Specify the project that contains the Cloud Pak foundational services operators
 spec:
   channel: v1.2
   installPlanApproval: Automatic
@@ -426,7 +419,8 @@ oc get deployments -n cpd-operators -l olm.owner="ibm-cpd-scheduling-operator.v1
 -o jsonpath="{.items[0].status.availableReplicas} {'\n'}"
 ```
 
-## Cloud Pak for Data operator subscription
+### Cloud Pak for Data operator subscription
+
 ```
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
@@ -441,7 +435,10 @@ spec:
   source: cpd-platform
   sourceNamespace: openshift-marketplace
 EOF
+```
 
+### NamespaceScope Operator
+```
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
@@ -468,7 +465,8 @@ oc get deployments -n ibm-common-services -l olm.owner="cpd-platform-operator.v2
 -o jsonpath="{.items[0].status.availableReplicas} {'\n'}"
 ```
 
-## WKC Subscription creation
+
+### WKC Subscription creation
 
 ```
 cat <<EOF |oc apply -f -
@@ -501,3 +499,96 @@ oc get deployments -n ibm-common-services -l olm.owner="ibm-cpd-wkc.v1.0.1" \
 -o jsonpath="{.items[0].status.availableReplicas} {'\n'}"
 ```
 
+
+## Installation
+
+### Installing individual foundational services
+```
+The IBM Cloud Pak for Data platform operator automatically installs the following foundational services:
+* Certificate management service
+* Identity and Access Management Service (IAM Service)
+* Administration hub
+```
+
+
+### NamespaceScope Operator
+
+```
+cat <<EOF |oc apply -f -
+apiVersion: operator.ibm.com/v1
+kind: NamespaceScope
+metadata:
+  name: cpd-operators
+  namespace: ibm-common-services       # (Default) Replace with the Cloud Pak for Data platform operator project name
+spec:
+  csvInjector:                    # This setting is required for some services. Do not delete this line if you specified it when you created operator subscriptions.
+    enable: true                  # This setting is required for some services. Do not delete this line if you specified it when you created operator subscriptions.
+  namespaceMembers:
+  - ibm-common-services                # (Default) Replace with the Cloud Pak for Data platform operator project name
+  - cpd                           # Replace with the project where you will install Cloud Pak for Data
+EOF
+```
+
+### Installing Cloud Pak for Data
+```
+cat <<EOF |oc apply -f -
+apiVersion: cpd.ibm.com/v1
+kind: Ibmcpd
+metadata:
+  name: ibmcpd-cr                                     # This is the recommended name, but you can change it
+  namespace: cpd                                      # Replace with the project where you will install Cloud Pak for Data
+spec:
+  license:
+    accept: true
+    license: Enterprise                               # Specify the Cloud Pak for Data license you purchased
+  storageClass: managed-nfs-storage                   # Replace with the name of a RWX storage class, such as managed-nfs-storage
+EOF
+
+
+
+oc get Ibmcpd ibmcpd-cr -o jsonpath="{.status.controlPlaneStatus}{'\n'}" -n cpd
+oc get ZenService lite-cr -o jsonpath="{.status.zenStatus}{'\n'}" -n cpd
+
+# Wait for the ZenService status to become completed
+
+# On Install completion, you can get the CPD URL with the following command
+oc get ZenService lite-cr -o jsonpath="{.status.url}{'\n'}" -n cpd
+
+# Get password
+oc extract secret/admin-user-details --keys=initial_admin_password --to=- -n cpd
+```
+
+### Installing Watson Knowledge Catalog
+
+```
+cat <<EOF |oc apply -f -
+apiVersion: wkc.cpd.ibm.com/v1beta1
+kind: WKC
+metadata:
+  name: wkc-cr     # This is the recommended name, but you can change it
+  namespace: cpd    # Replace with the project where you will install Watson Knowledge Catalog
+spec:
+  license:
+    accept: true
+    license: Enterprise                      # Specify the license you purchased
+  version: 4.0.1
+  storageClass: managed-nfs-storage          #if you use a different storage class, replace it with the appropriate storage class
+  # wkc_db2u_set_kernel_params: True
+  # iis_db2u_set_kernel_params: True
+  # install_wkc_core_only: true     # To install the core version of the service, remove the comment tagging from the beginning of the line.
+
+EOF
+
+oc get WKC wkc-cr -o jsonpath='{.status.wkcStatus} {"\n"}'
+oc get CCS ccs-cr -o jsonpath='{.status.ccsStatus} {"\n"}'
+oc get DataRefinery datarefinery-sample -o jsonpath='{.status.datarefineryStatus} {"\n"}'
+oc get Db2aaserviceService db2aaservice-cr -o jsonpath='{.status.db2aaserviceStatus} {"\n"}'
+oc get IIS iis-cr -o jsonpath='{.status.iisStatus} {"\n"}'
+oc get UG ug-cr -o jsonpath='{.status.ugStatus} {"\n"}'
+```
+
+### Resize PVC
+```
+# Change the storage value in "spec" from 40Gi to 100Gi
+oc edit pvc data-c-db2oltp-iis-db2u-0
+```
