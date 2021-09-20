@@ -220,17 +220,45 @@ oc label machineconfigpool worker db2u-kubelet=sysctl
 oc get machineconfigpool
 ```
 
-## Configure PullSecret
+## Create WKC SCC
 
+
+
+
+## Configure cluster pullsecret and ImageContentSourcePolicy
+
+```
 oc extract secret/pull-secret -n openshift-config
 
+# Image content source policy
 
-
+cat <<EOF |oc apply -f -
+apiVersion: operator.openshift.io/v1alpha1
+kind: ImageContentSourcePolicy
+metadata:
+  name: cloud-pak-for-data-mirror
+spec:
+  repositoryDigestMirrors:
+  - mirrors:
+    - ${PRIVATE_REGISTRY}/opencloudio
+    source: quay.io/opencloudio
+  - mirrors:
+    - ${PRIVATE_REGISTRY}/cp
+    source: cp.icr.io/cp
+  - mirrors:
+    - ${PRIVATE_REGISTRY}/cp/cpd
+    source: cp.icr.io/cp/cpd
+  - mirrors:
+    - ${PRIVATE_REGISTRY}/cpopen
+    source: icr.io/cpopen
+EOF
 
 oc get imageContentSourcePolicy
 oc get node
+```
 
 ## Create the catalog source
+```
 oc get catalogsource -n openshift-marketplace
 
 cloudctl case launch \
@@ -278,6 +306,7 @@ cloudctl case launch \
 
 oc get catalogsource -n openshift-marketplace ibm-cpd-wkc-operator-catalog \
 -o jsonpath='{.status.connectionState.lastObservedState} {"\n"}'
+```
 
 
 ##  Create Projects
@@ -337,8 +366,8 @@ oc -n ibm-common-services get configmap namespace-scope -o yaml
 ```
 
 ## Subscriptions
-
-# IBM Cloud Pak foundational services
+```
+### IBM Cloud Pak foundational services
 # v3.10.0
 
 cat <<EOF |oc apply -f -
@@ -358,16 +387,18 @@ EOF
 oc --namespace ibm-common-services get csv
 oc get crd | grep operandrequest
 oc api-resources --api-group operator.ibm.com
+```
 
 
+## Installing individual foundational services
 
-Installing individual foundational services
 The IBM Cloud Pak for Data platform operator automatically installs the following foundational services:
 * Certificate management service
 * Identity and Access Management Service (IAM Service)
 * Administration hub
 
-# IBM Cloud pack for Data Scheduler
+
+## IBM Cloud pack for Data Scheduler
 
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
@@ -434,4 +465,37 @@ oc get csv -n ibm-common-services cpd-platform-operator.v2.0.3 \
 oc get deployments -n ibm-common-services -l olm.owner="cpd-platform-operator.v2.0.3" \
 -o jsonpath="{.items[0].status.availableReplicas} {'\n'}"
 
+
+## WKC Subscription creation
+
+```
+cat <<EOF |oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  labels:
+    app.kubernetes.io/instance:  ibm-cpd-wkc-operator-catalog-subscription
+    app.kubernetes.io/managed-by: ibm-cpd-wkc-operator
+    app.kubernetes.io/name:  ibm-cpd-wkc-operator-catalog-subscription
+  name: ibm-cpd-wkc-operator-catalog-subscription
+  namespace: ibm-common-services   # Pick the project that contains the Cloud Pak for Data operator
+spec:
+    channel: v1.0
+    installPlanApproval: Automatic
+    name: ibm-cpd-wkc
+    source: ibm-cpd-wkc-operator-catalog
+    sourceNamespace: openshift-marketplace
+EOF
+
+
+oc get sub -n ibm-common-services  ibm-cpd-wkc-operator-catalog-subscription \
+-o jsonpath='{.status.installedCSV} {"\n"}'
+
+oc get csv -n ibm-common-services ibm-cpd-wkc.v1.0.1 \
+-o jsonpath='{ .status.phase } : { .status.message} {"\n"}'
+
+
+oc get deployments -n ibm-common-services -l olm.owner="ibm-cpd-wkc.v1.0.1" \
+-o jsonpath="{.items[0].status.availableReplicas} {'\n'}"
+```
 
