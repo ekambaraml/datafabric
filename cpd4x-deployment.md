@@ -1,52 +1,62 @@
-##  Deployment planning
-Requirements
 
-    OpenShift 4.6.31 or later
+## Topics
 
-    Cluster Compute Requirement
-        Minimum 3 compute nodes
-        Each node should be of minimum 16core, 64GB RAM and 200GB storage
-        Total Compute requirement will be calculated based on the number of services and user workload. IBM Team will help size the cluster compute requirements.
-        Minimum Compute requirement for installation: 48 Core, 196 GB
-        OpenShift nodes should meet the configuration requirements for CPD services
-
-    Cloud Pak for Data 4.0 Services
-        Cloud Pak for Data - Control Plane
-        DB2U Database
-        Watson Knowledge Catalog and its bundle
-
-    Networking Internet access to Mirror IBM image registries
-        docker.io/ibmcom
-        quay.io/opencloudio
-        cp.icr.io/cp
-        icr.io/cpopen
-
-    Networking Internet access to download IBM installer and cases:
-        https://github.com/IBM/cloud-pak-cli/releases/download
-        https://github.com/IBM/cloud-pak/raw/master/repo/case
-
-    Storage
-        Persistent Storage 1 TB
-        Registry Storage 300 GB (example, Artifactory)
-
-    License
-        IBM Cloud Pak for Data Standard/Enterprise license
-        Access to IBM Entitlement Key (myibm.ibm.com)
-
-    User Permissions
-        OpenShift Administrator ( Cluster preparation )
-        Cloud Pak for Data administrator ( WKC Installation )
-        Read/Write permission to Artifactory Registry
-
-    Bastion Host
-        RHEL 8x, 500GB disk
-        Skopeo 1.x
-        python 2.x & 3.x
-        pyyaml, jq
+* 1.0 Deployment Planning
+* 2.0 Setup Bastion Host
+* 3.0 Registry Mirroring
+* 4.0 Configuring cluster pull images
+* 5.0 Node settings
+* 6.0 Project creation and NamespaceScope
+* 7.0 Custom Security Context Constraints
+* 8.0 Creating Catalog sources
+* 9.0 Creating Subscriptions
+* 10.0 Installing CPD and Watson Knowledge Catalog
 
 
+## 1.0 Deployment Requirements & Planning
 
-## Setup Install client environment
+- OpenShift 4.6.31 or later
+
+- Cluster Compute Requirement
+  - [ ] Minimum 3 compute nodes
+  - [ ] Each node should be of minimum 16core, 64GB RAM and 200GB storage
+  - [ ] Total Compute requirement will be calculated based on the number of services and user workload. IBM Team will help size the cluster compute requirements.
+  - [ ] Minimum Compute requirement for installation: 48 Core, 196 GB
+  - [ ] OpenShift nodes should meet the configuration requirements for CPD services
+
+- Cloud Pak for Data 4.0 Services
+  - [ ] IBM common Foundation Service
+  - [ ] Cloud Pak for Data - Control Plane
+  - [ ] Watson Knowledge Catalog and its bundle
+
+- Networking Internet access to Mirror IBM image registries
+  - [ ] docker.io/ibmcom
+  - [ ] quay.io/opencloudio
+  - [ ] cp.icr.io/cp 
+  - [ ] icr.io/cpopen
+- Networking Internet access to download IBM installer and cases:
+  - [ ] https://github.com/IBM/cloud-pak-cli/releases/download
+  - [ ] https://github.com/IBM/cloud-pak/raw/master/repo/case
+- Storage
+  - [ ] Persistent Storage 1 TB
+  - [ ] Registry Storage 300 GB (example, Artifactory)
+- License
+  - [ ] IBM Cloud Pak for Data Standard/Enterprise license
+  - [ ] Access to IBM Entitlement Key (myibm.ibm.com)
+- User Permissions
+  - [ ] OpenShift Administrator ( Cluster preparation )
+  - [ ] Cloud Pak for Data administrator ( WKC Installation )
+  - [ ] Read/Write permission to Artifactory Registry 
+- Bastion Host
+   - [ ] RHEL 8x, 500GB disk
+   - [ ] Skopeo 1.x
+   - [ ] python 2.x & 3.x
+   - [ ] pyyaml, jq
+
+
+
+## 2.0 Setup Bastion Host
+Installation client machine environment setup
 
 ```
 # Namespaces and Deployment configurations
@@ -80,12 +90,21 @@ export CASECTL_RESOLVE_DEPENDENCIES=false                         # This require
 export USE_SKOPEO=true
 ```
 
-## Download Installer
+###  Download Installer
 ```
 wget https://github.com/IBM/cloud-pak-cli/releases/download/v3.10.0/cloudctl-linux-amd64.tar.gz
 tar -xf cloudctl-linux-amd64.tar.gz
 cp cloudctl-linux-amd64 /usr/bin/cloudctl
 cloudctl version
+
+# OpenShift client (only if you don't have latest oc client)
+wget https://mirror.openshift.com/pub/openshift-v4/clients/ocp/4.6.30/openshift-client-linux-4.6.30.tar.gz
+tar xvf openshift-client-linux-4.6.30.tar.gz
+cp oc /usr/bin
+cp kubectl /usr/bin
+oc version
+
+
 
 # Skopeo 1.x version is required
 sudo yum install -y httpd-tools podman ca-certificates openssl skopeo jq bind-utils git
@@ -99,21 +118,29 @@ pip2 install pyyaml
 skopeo --version
 ```
 
-## Setup private registry
+
+
+##  3.0 Registry Mirroing
+Mirroring images with a bastion node
+
+### Setup private registry
+private registry, This is not for production
+
+```
 podman run --privileged -d   --name registry   -p 5000:5000 -v /data/private:/var/lib/registry registry:2
+```
 
 
-
-## Mirroring images with a bastion node
-
-Following commands will save the CASE file for IBM common foundation services, Cloud Pak for Data, Common Core Services and Watson Knowledge Catalog and Mirroring to customer's private registry.
 
 #### Private registry access validation
+```
 podman login -u ${PRIVATE_REGISTRY_USER} -p ${PRIVATE_REGISTRY_PASSWORD} ${PRIVATE_REGISTRY} --tls-verify=false
-
+```
 #### IBM registry access validation
+```
 podman login -u ${REGISTRY_USER} -p ${REGISTRY_PASSWORD} ${REGISTRY_SERVER} --tls-verify=false
-
+```
+Following commands will save the CASE file for IBM common foundation services, Cloud Pak for Data, Common Core Services and Watson Knowledge Catalog and Mirroring to customer's private registry.
 
 ```
 # cloud pak for data
@@ -167,9 +194,115 @@ curl -k -u ${PRIVATE_REGISTRY_USER}:${PRIVATE_REGISTRY_PASSWORD} http://${PRIVAT
 ```
 
 
-## Node Settings
+## 4.0 Configure Global cluster pullsecret and ImageContentSourcePolicy
+
+
+###  Create the utility
+
+    
 ```
-# Kernel parameters
+usage util-add-pull-secret.sh <repository> <user> <password>
+
+# cat util-add-pull-secret.sh
+#!/bin/bash
+
+if [ "$#" -lt 3 ]; then
+  echo "Usage: $0 <repo-url> <artifactory-user> <API-key>" >&2
+  exit 1
+fi
+
+# set -x
+
+REPO_URL=$1
+REPO_USER=$2
+REPO_API_KEY=$3
+
+pull_secret=$(echo -n "$REPO_USER:$REPO_API_KEY" | base64 -w0)
+oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d | sed -e 's|:{|:{"'$REPO_URL'":{"auth":"'$pull_secret'","email":"not-used"\},|' > /tmp/dockerconfig.json
+oc set data secret/pull-secret -n openshift-config --from-file=.dockerconfigjson=/tmp/dockerconfig.json
+
+```
+
+### Add pull secret for private registry
+```
+chmod +x util-add-pull-secret.sh
+./util-add-pull-secret.sh ${PRIVATE_REGISTRY} ${PRIVATE_REGISTRY_USER} ${PRIVATE_REGISTRY_PASSWORD}
+
+```
+
+### Verify the pullsecrets
+```
+oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d | jq
+
+Output (example):
+
+ "auths": {
+    "ai.ibmcloudpack.com": {
+      "auth": "YWRtaW46YWRtaW5wYXNz",
+      "email": "not-used"
+    },
+    
+```
+
+### Image content source policy
+Note: This will cause the nodes to restart
+Requires Cluster Admin permission
+```
+cat <<EOF |oc apply -f -
+apiVersion: operator.openshift.io/v1alpha1
+kind: ImageContentSourcePolicy
+metadata:
+  name: cloud-pak-for-data-mirror
+spec:
+  repositoryDigestMirrors:
+  - mirrors:
+    - ${PRIVATE_REGISTRY}/opencloudio
+    source: quay.io/opencloudio
+  - mirrors:
+    - ${PRIVATE_REGISTRY}/cp
+    source: cp.icr.io/cp
+  - mirrors:
+    - ${PRIVATE_REGISTRY}/cp/cpd
+    source: cp.icr.io/cp/cpd
+  - mirrors:
+    - ${PRIVATE_REGISTRY}/cpopen
+    source: icr.io/cpopen
+EOF
+
+oc get imageContentSourcePolicy
+oc get node
+
+Wait for all the nodes are updated
+
+oc get mcp
+oc get nodes
+
+Cluster nodes will restart, Wait for all the nodes are ready
+
+watch "oc get nodes"
+
+NAME                              STATUS                     ROLES    AGE   VERSION
+master0.lustier.cp.fyre.ibm.com   Ready,SchedulingDisabled   master   66m   v1.19.0+d670f74
+master1.lustier.cp.fyre.ibm.com   Ready                      master   66m   v1.19.0+d670f74
+master2.lustier.cp.fyre.ibm.com   Ready                      master   65m   v1.19.0+d670f74
+worker0.lustier.cp.fyre.ibm.com   Ready,SchedulingDisabled   worker   57m   v1.19.0+d670f74
+worker1.lustier.cp.fyre.ibm.com   Ready                      worker   57m   v1.19.0+d670f74
+worker2.lustier.cp.fyre.ibm.com   Ready                      worker   57m   v1.19.0+d670f74
+
+```
+
+
+
+## 5.0 Node Settings for Cloud Pak for Data
+https://www.ibm.com/docs/en/cloud-paks/cp-data/4.0?topic=tasks-changing-required-node-settings
+
+### CRIO settings
+
+
+### Kernel parameters
+Pleaser refere this documentation for Kernel parameter requirement for WKC https://www.ibm.com/docs/en/cloud-paks/cp-data/4.0?topic=tasks-changing-required-node-settings Below settings are respective for node of 64 cpu and 791 of RAM (as per Danske setup for one node configuration, subject to change if the nodes size changes).
+
+```
 cat <<EOF |oc apply -f -
 apiVersion: tuned.openshift.io/v1
 kind: Tuned
@@ -197,9 +330,10 @@ spec:
     priority: 10
     profile: cp4d-wkc-ipc
 EOF
+```
 
-
-# Kubectl
+### Configure Unsafe SysCtl for Db2U, custom-kubelet
+```
 cat << EOF | oc apply -f -
 apiVersion: machineconfiguration.openshift.io/v1
 kind: KubeletConfig
@@ -221,69 +355,7 @@ oc get machineconfigpool
 ```
 
 
-## Configure Global cluster pullsecret and ImageContentSourcePolicy
-
-This deployment is using the private registry. So the pull secret should be configured 
-the "PRIVATE REGISTRY". Save the following script to a file named "util-add-pull-secret.sh".
-
-usage util-add-pull-secret.sh <repository> <user> <password>
-
-###  Create the utility
-    
-```
-# cat util-add-pull-secret.sh
-#!/bin/bash
-
-if [ "$#" -lt 3 ]; then
-  echo "Usage: $0 <repo-url> <artifactory-user> <API-key>" >&2
-  exit 1
-fi
-
-# set -x
-
-REPO_URL=$1
-REPO_USER=$2
-REPO_API_KEY=$3
-
-pull_secret=$(echo -n "$REPO_USER:$REPO_API_KEY" | base64 -w0)
-oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d | sed -e 's|:{|:{"'$REPO_URL'":{"auth":"'$pull_secret'","email":"not-used"\},|' > /tmp/dockerconfig.json
-oc set data secret/pull-secret -n openshift-config --from-file=.dockerconfigjson=/tmp/dockerconfig.json
-
-```
-
-### Add pull secret for private registry    
-
-```
-oc extract secret/pull-secret -n openshift-config
-
-# Image content source policy
-
-cat <<EOF |oc apply -f -
-apiVersion: operator.openshift.io/v1alpha1
-kind: ImageContentSourcePolicy
-metadata:
-  name: cloud-pak-for-data-mirror
-spec:
-  repositoryDigestMirrors:
-  - mirrors:
-    - ${PRIVATE_REGISTRY}/opencloudio
-    source: quay.io/opencloudio
-  - mirrors:
-    - ${PRIVATE_REGISTRY}/cp
-    source: cp.icr.io/cp
-  - mirrors:
-    - ${PRIVATE_REGISTRY}/cp/cpd
-    source: cp.icr.io/cp/cpd
-  - mirrors:
-    - ${PRIVATE_REGISTRY}/cpopen
-    source: icr.io/cpopen
-EOF
-
-oc get imageContentSourcePolicy
-oc get node
-```
-
-## Create the catalog source
+## 6.0 Create the catalog source
 ```
 oc get catalogsource -n openshift-marketplace
 
@@ -334,15 +406,14 @@ oc get catalogsource -n openshift-marketplace ibm-cpd-wkc-operator-catalog \
 -o jsonpath='{.status.connectionState.lastObservedState} {"\n"}'
 ```
 
-
-##  Create Projects
+### 7.0  Project/Namespace setup
 
 ```
 oc new-project ibm-common-services
 oc new-project cpd
-
-# Operator Group creation
-
+```
+### Operator Group creation
+```
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha2
 kind: OperatorGroup
@@ -355,7 +426,12 @@ spec:
 EOF
 
 
-# Namescope operators
+oc get OperatorGroup operatorgroup -n ${IBM_COMMON_SERVICE} -o yaml
+```
+
+### Namescope operators
+
+```
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
@@ -389,13 +465,36 @@ EOF
 oc -n ibm-common-services get namespacescope common-service -o yaml
 oc -n ibm-common-services edit namespacescope common-service
 oc -n ibm-common-services get configmap namespace-scope -o yaml
+
 ```
 
-## Creating Subscriptions
+### ConfigMap for Deploying in custom namespaces
+
+IBM Common services are deployed in the namespace "ibm-common-services", Cloud Pak for Data operators are in "cpd-operators" by default. ConfigMap is required when customer wants to use custom namespaces.
+```
+cat <<EOF |oc apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: common-service-maps
+  namespace: kube-public
+data: 
+  common-service-maps.yaml: |
+    namespaceMapping:
+    - requested-from-namespace:
+      - ${CPD_INSTANCE}
+      map-to-common-service-namespace: ${IBM_COMMON_SERVICE} 
+    defaultCsNs: ibm-common-services
+EOF
+
+```
+
+
+## 8.0 Creating Subscriptions
 
 
 ### IBM Cloud Pak foundational services
-# v3.10.0
+v3.10.0
 ```
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
@@ -416,9 +515,6 @@ oc get crd | grep operandrequest
 oc api-resources --api-group operator.ibm.com
 ```
 
-
-
-
 ### IBM Cloud pack for Data Scheduler (Optional)
 ```
 cat <<EOF |oc apply -f -
@@ -426,7 +522,7 @@ apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
   name: ibm-cpd-scheduling-catalog-subscription
-  namespace: bm-common-services   # Specify the project that contains the Cloud Pak foundational services operators
+  namespace: ibm-common-services   # Specify the project that contains the Cloud Pak foundational services operators
 spec:
   channel: v1.2
   installPlanApproval: Automatic
@@ -526,7 +622,7 @@ oc get deployments -n ibm-common-services -l olm.owner="ibm-cpd-wkc.v1.0.1" \
 ```
 
 
-## Installation
+## 9.0 Installation
 
 ### Installing individual foundational services
 ```
