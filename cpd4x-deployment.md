@@ -366,8 +366,10 @@ oc -n ibm-common-services get configmap namespace-scope -o yaml
 ```
 
 ## Subscriptions
-```
+
+
 ### IBM Cloud Pak foundational services
+```
 # v3.10.0
 
 cat <<EOF |oc apply -f -
@@ -399,13 +401,13 @@ The IBM Cloud Pak for Data platform operator automatically installs the followin
 
 
 ## IBM Cloud pack for Data Scheduler
-
+```
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
   name: ibm-cpd-scheduling-catalog-subscription
-  namespace: cpd-operators # Specify the project that contains the Cloud Pak foundational services operators
+  namespace: cpd # Specify the project that contains the Cloud Pak foundational services operators
 spec:
   channel: v1.2
   installPlanApproval: Automatic
@@ -422,10 +424,10 @@ oc get csv -n cpd-operators ibm-cpd-scheduling-operator.v1.2.2 \
 
 oc get deployments -n cpd-operators -l olm.owner="ibm-cpd-scheduling-operator.v1.2.2" \
 -o jsonpath="{.items[0].status.availableReplicas} {'\n'}"
-
+```
 
 ## Cloud Pak for Data operator subscription
-
+```
 cat <<EOF |oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
@@ -464,7 +466,7 @@ oc get csv -n ibm-common-services cpd-platform-operator.v2.0.3 \
 
 oc get deployments -n ibm-common-services -l olm.owner="cpd-platform-operator.v2.0.3" \
 -o jsonpath="{.items[0].status.availableReplicas} {'\n'}"
-
+```
 
 ## WKC Subscription creation
 
