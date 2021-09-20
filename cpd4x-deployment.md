@@ -220,12 +220,38 @@ oc label machineconfigpool worker db2u-kubelet=sysctl
 oc get machineconfigpool
 ```
 
-## Create WKC SCC
 
+## Configure Global cluster pullsecret and ImageContentSourcePolicy
 
+This deployment is using the private registry. So the pull secret should be configured 
+the "PRIVATE REGISTRY". Save the following script to a file named "util-add-pull-secret.sh".
 
+usage util-add-pull-secret.sh <repository> <user> <password>
 
-## Configure cluster pullsecret and ImageContentSourcePolicy
+###  Create the utility
+    
+```
+# cat util-add-pull-secret.sh
+#!/bin/bash
+
+if [ "$#" -lt 3 ]; then
+  echo "Usage: $0 <repo-url> <artifactory-user> <API-key>" >&2
+  exit 1
+fi
+
+# set -x
+
+REPO_URL=$1
+REPO_USER=$2
+REPO_API_KEY=$3
+
+pull_secret=$(echo -n "$REPO_USER:$REPO_API_KEY" | base64 -w0)
+oc get secret/pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' | base64 -d | sed -e 's|:{|:{"'$REPO_URL'":{"auth":"'$pull_secret'","email":"not-used"\},|' > /tmp/dockerconfig.json
+oc set data secret/pull-secret -n openshift-config --from-file=.dockerconfigjson=/tmp/dockerconfig.json
+
+```
+
+### Add pull secret for private registry    
 
 ```
 oc extract secret/pull-secret -n openshift-config
