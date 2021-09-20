@@ -95,10 +95,14 @@ alternatives --set python /usr/bin/python2
 
 pip2 install pyyaml
 
-skopeo Version 1.2.0 or later
-
+# skopeo Version 1.2.0 or later
+skopeo --version
 ```
- 
+
+## Setup private registry
+podman run --privileged -d   --name registry   -p 5000:5000 -v /data/private:/var/lib/registry registry:2
+
+
 
 ## Mirroring images with a bastion node
 
